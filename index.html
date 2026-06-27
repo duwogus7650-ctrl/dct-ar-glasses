@@ -307,6 +307,7 @@
       <button class="chip-btn" data-cmd="실사 모드 켜줘">📷 실사 모드</button>
       <button class="chip-btn" data-cmd="해외 여행 시나리오 보여줘">🌐 번역 데모</button>
       <button class="chip-btn" data-cmd="얼굴 인식 켜줘">🪪 얼굴 인식</button>
+      <button class="chip-btn" data-cmd="사물 스캔">🔍 사물 스캔(AI)</button>
       <button class="chip-btn" data-cmd="러닝 코치 시나리오">🏃 러닝</button>
       <button class="chip-btn" data-cmd="물 마시기 알림 위젯 추가해줘">💧 위젯 추가</button>
       <button class="chip-btn" data-cmd="도움말">？ 명령어</button>
@@ -340,8 +341,9 @@
         <span class="mi">🧭</span><span class="mn">자이로 시점<small>기기를 돌리면 시야 이동</small></span>
         <span class="sw" id="gyroToggle"><i></i></span>
       </label>
+      <button class="pbtn ghost" id="btnObjScan">🔍 AI 사물 인식 (무엇이든)</button>
       <button class="pbtn ghost" id="btnScan">📸 AI 장면 번역 스캔</button>
-      <p class="note">실사 모드는 카메라로 <b>실제 사람·사물을 실시간 인식</b>해요 (TensorFlow.js · COCO-SSD). AI 장면 번역과 코드 위젯은 아래 AI 모드와 키가 필요합니다.</p>
+      <p class="note">실사 모드는 카메라로 <b>실제 사람·사물을 실시간 인식</b>해요 (TensorFlow.js · COCO-SSD, 80종). 더 많은 사물·음식·동식물은 <b>AI 사물 인식</b>으로 — 80종 제한 없이 무엇이든(AI 모드·키 필요).</p>
     </div>
 
     <div class="grp">
@@ -853,7 +855,7 @@
     const v=camEl(); if(!v || v.readyState<2 || !v.videoWidth) return;
     if(now-live.last<160) return;
     live.busy=true;
-    live.model.detect(v, 14).then(d=>{ live.dets=d||[]; }).catch(()=>{}).finally(()=>{ live.busy=false; live.last=performance.now(); });
+    live.model.detect(v, 20, 0.30).then(d=>{ live.dets=d||[]; }).catch(()=>{}).finally(()=>{ live.busy=false; live.last=performance.now(); });
   }
 
   function videoCover(){ const v=camEl(); const vw=v.videoWidth||16, vh=v.videoHeight||9;
@@ -862,7 +864,7 @@
     if(live.mirror) sx = W-(sx+sw); return {x:sx,y:sy,w:sw,h:sh}; }
 
   function collectLiveAnchors(wanted){
-    const dets=(live.dets||[]).filter(d=>d.score>0.45);
+    const dets=(live.dets||[]).filter(d=>d.score>0.30);
     let tracked=null;
     if(state.modules.social){
       const persons=dets.filter(d=>d.class==='person').map(d=>{ const m=mapBox(d.bbox); return {m, cx:m.x+m.w/2, cy:m.y+m.h/2}; });
@@ -883,7 +885,7 @@
     if(state.modules.objectID){
       let n=0;
       for(const d of dets.slice().sort((a,b)=>b.score-a.score)){
-        if(n>=6) break;
+        if(n>=14) break;
         if(d.class==='person' && state.modules.social) continue; // avoid double-labeling the tracked person
         n++;
         const m=mapBox(d.bbox); const ko=COCO_KO[d.class]||d.class; const pct=Math.round(d.score*100);
@@ -921,14 +923,41 @@
       const obj=extractJSON(txt); const items=(obj&&obj.items)||[];
       if(!items.length){ toast('번역할 외국어 텍스트를 찾지 못했어요.'); return; }
       const exp=performance.now()+9000;
-      live.scan=items.slice(0,8).map((it,i)=>({orig:it.orig||'',tr:it.tr||'',x:clamp(+it.x||0.5,0,1),y:clamp(+it.y||0.5,0,1),exp,i}));
+      live.scan=items.slice(0,8).map((it,i)=>({orig:it.orig||'',tr:it.tr||'',x:clamp(+it.x||0.5,0,1),y:clamp(+it.y||0.5,0,1),exp,i,kind:'trans'}));
       toast(`🌐 ${live.scan.length}개 번역을 띄웠어요 (9초)`,'warm');
     }catch(e){ toast('장면 번역 실패: '+e.message.slice(0,90),'alert'); }
   }
+  // AI open-vocabulary object recognition — anything, not just COCO's 80 classes
+  async function aiObjectScan(){
+    if(!(state.ai.on&&state.ai.key)){ toast('먼저 설정에서 AI 모드를 켜세요 (API 키 필요).','alert'); return; }
+    const url=grabFrame(); if(!url){ toast('스캔할 화면을 캡처하지 못했어요.','alert'); return; }
+    toast('🔍 화면 속 사물을 식별하는 중…');
+    try{
+      const b64=url.split(',')[1];
+      const res=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST',
+        headers:{'content-type':'application/json','x-api-key':state.ai.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({ model:state.ai.model, max_tokens:1000,
+          system:'이미지에 보이는 사물·물체·음식·동식물을 가능한 한 구체적으로 한국어로 식별한다(일반 80종에 얽매이지 말 것 — 품종·재료·브랜드까지). 순수 JSON만: {"items":[{"label":"이름","x":0~1,"y":0~1}]}. x,y는 그 사물 중심의 이미지 내 상대 좌표(좌상단 0,0, 우하단 1,1). 최대 12개, 뚜렷한 것 위주.',
+          messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},{type:'text',text:'보이는 사물을 모두 구체적으로 알려줘.'}]}] })
+      });
+      if(!res.ok){ const t=await res.text(); throw new Error('HTTP '+res.status+' '+t.slice(0,80)); }
+      const j=await res.json(); const txt=(j.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+      const obj=extractJSON(txt); const items=(obj&&obj.items)||[];
+      if(!items.length){ toast('식별된 사물이 없어요.'); return; }
+      const exp=performance.now()+10000;
+      live.scan=items.slice(0,12).map((it,i)=>({label:it.label||'',x:clamp(+it.x||0.5,0,1),y:clamp(+it.y||0.5,0,1),exp,i,kind:'obj'}));
+      toast(`🔍 ${live.scan.length}개 사물을 식별했어요 (10초)`,'warm');
+    }catch(e){ toast('AI 사물 인식 실패: '+e.message.slice(0,90),'alert'); }
+  }
   function collectScanAnchors(wanted){
     for(const it of live.scan){ const sx=it.x*W, sy=it.y*H;
-      wanted['scan'+it.i]={ x:sx, y:sy-6, ax:sx, ay:sy, key:'scan:'+it.orig+it.tr,
-        html:`<div class="ar-card trans"><div class="orig">${esc(it.orig)}</div><div class="tr">${esc(it.tr)}</div></div>` };
+      if(it.kind==='obj'){
+        wanted['scan-o'+it.i]={ x:sx, y:sy-6, ax:sx, ay:sy, key:'so:'+it.label,
+          html:`<div class="ar-card obj"><div class="t1"><span class="ico">🔍</span>${esc(it.label)}</div></div>` };
+      } else {
+        wanted['scan-t'+it.i]={ x:sx, y:sy-6, ax:sx, ay:sy, key:'st:'+it.orig+it.tr,
+          html:`<div class="ar-card trans"><div class="orig">${esc(it.orig)}</div><div class="tr">${esc(it.tr)}</div></div>` };
+      }
     }
   }
   function expireScan(now){ if(live.scan.length) live.scan=live.scan.filter(it=>it.exp>now); }
@@ -1255,7 +1284,8 @@
     if(has(low,['안경 켜','전원 켜','깨어','wake'])){ setPower(true); toast('👓 안경을 켰어요'); return; }
 
     // real-world source / voice / gyro / scan
-    if(has(low,['장면 번역','글자 번역','간판 읽','간판 번역','ocr','스캔','scan'])){ aiScan(); return; }
+    if(has(low,['사물 스캔','사물 인식 스캔','뭐가 보여','뭐가보여','이게 뭐','이거 뭐','전부 인식','다 인식','무엇이든','ai 사물','사물 식별','오브젝트'])){ aiObjectScan(); return; }
+    if(has(low,['장면 번역','글자 번역','간판 읽','간판 번역','번역 스캔','ocr','스캔','scan'])){ aiScan(); return; }
     if(has(low,['실사','카메라','실제 세상','실제세상','현실','라이브','live','캠','웹캠'])){
       if(has(low,OFF_WORDS)&&!has(low,['켜','보여','시작','전환'])){ setSource('sim'); toast('🖼️ 시뮬레이션 모드로 전환'); return; }
       setSource('cam'); toast('📷 실사 모드 — 카메라로 진짜 세상을 봐요','warm'); return;
@@ -1490,7 +1520,7 @@
       '“음성 켜줘” · “자이로 켜줘”',
       '“번역 켜줘” · “사물 인식 꺼”',
       '“이 사람 이름 철수 저장”',
-      '“장면 번역” (실사 + AI 모드)',
+      '“사물 스캔”·“장면 번역” (실사 + AI 모드, 무엇이든)',
       '“주식 위젯 추가” · “환율 계산기 만들어줘” (AI)',
       '“해외 여행 시나리오” · “다음 장면”'
     ];
@@ -1538,6 +1568,7 @@
   document.getElementById('gyroToggle').addEventListener('click',function(){ toggleGyro(!this.classList.contains('on')); });
   document.getElementById('btnMic').addEventListener('click',()=>toggleVoice());
   document.getElementById('btnScan').addEventListener('click',()=>aiScan());
+  document.getElementById('btnObjScan').addEventListener('click',()=>aiObjectScan());
 
   // AI panel
   const aiToggle=document.getElementById('aiToggle');
