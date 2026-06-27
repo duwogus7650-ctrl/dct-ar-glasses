@@ -451,7 +451,7 @@
   };
   let panX=0;                              // gyro look-around (sim)
   const orient={alpha:0,beta:0,gamma:0};   // device orientation
-  const live={ stream:null, model:null, modelLoading:false, busy:false, dets:[], last:0,
+  const live={ stream:null, model:null, modelLoading:false, busy:false, infer:false, dets:[], last:0,
                facing:'environment', mirror:false, named:null, scan:[], codeTimers:{},
                cls:{model:null,loading:false,busy:false,last:0,results:[]} };
   const COCO_KO={person:'사람',bicycle:'자전거',car:'자동차',motorcycle:'오토바이',airplane:'비행기',bus:'버스',
@@ -819,10 +819,10 @@
     live.cls.loading=false; return live.cls.model;
   }
   function runClassify(now){
-    const m=live.cls; if(!m.model||m.busy) return;
+    const m=live.cls; if(!m.model || live.infer) return;   // shares the GPU lock with detection
     const v=camEl(); if(!v||v.readyState<2||!v.videoWidth) return;
-    if(now-m.last<1100) return; m.busy=true;
-    m.model.classify(v,3).then(r=>{ m.results=r||[]; }).catch(()=>{}).finally(()=>{ m.busy=false; m.last=performance.now(); });
+    if(now-m.last<1200) return; live.infer=true;
+    m.model.classify(v,3).then(r=>{ m.results=r||[]; }).catch(()=>{}).finally(()=>{ live.infer=false; m.last=performance.now(); });
   }
   function koLabel(s){ const first=String(s||'').split(',')[0].trim(); return IMAGENET_KO[first]||IMAGENET_KO[s]||first; }
   function setClassifyUI(on){ const t=document.getElementById('classifyToggle'); if(t) t.classList.toggle('on',on); }
@@ -883,11 +883,11 @@
   }
 
   function runDetection(now){
-    if(!live.model || live.busy) return;
+    if(!live.model || live.infer) return;            // shared GPU lock: never run two models at once
     const v=camEl(); if(!v || v.readyState<2 || !v.videoWidth) return;
     if(now-live.last<160) return;
-    live.busy=true;
-    live.model.detect(v, 20, 0.30).then(d=>{ live.dets=d||[]; }).catch(()=>{}).finally(()=>{ live.busy=false; live.last=performance.now(); });
+    live.infer=true;
+    live.model.detect(v, 20, 0.40).then(d=>{ live.dets=d||[]; }).catch(()=>{}).finally(()=>{ live.infer=false; live.last=performance.now(); });
   }
 
   function videoCover(){ const v=camEl(); const vw=v.videoWidth||16, vh=v.videoHeight||9;
@@ -896,7 +896,7 @@
     if(live.mirror) sx = W-(sx+sw); return {x:sx,y:sy,w:sw,h:sh}; }
 
   function collectLiveAnchors(wanted){
-    const dets=(live.dets||[]).filter(d=>d.score>0.30);
+    const dets=(live.dets||[]).filter(d=>d.score>0.40);
     let tracked=null;
     if(state.modules.social){
       const persons=dets.filter(d=>d.class==='person').map(d=>{ const m=mapBox(d.bbox); return {m, cx:m.x+m.w/2, cy:m.y+m.h/2}; });
