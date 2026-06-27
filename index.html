@@ -30,9 +30,11 @@
   #world{z-index:0}
   #hud{z-index:1;pointer-events:none}
 
-  /* live camera / video background */
-  #cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1;background:#05070a;display:none}
+  /* live camera / video background (z-index 0 so it paints ABOVE the page bg;
+     #world canvas sits just above it and is cleared transparent in live mode) */
+  #cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;background:#05070a;display:none}
   body.live #cam{display:block}
+  body.live #world{background:transparent}
 
   /* ===== HUD overlay layer ===== */
   #overlay{position:fixed;inset:0;z-index:2;pointer-events:none}
@@ -933,18 +935,23 @@
 
   /* =================== VOICE (Web Speech) =================== */
   let recog=null;
+  // Tap-to-talk: each tap listens for ONE command (no auto-restart loop —
+  // restarting kept re-triggering the mic permission prompt on mobile browsers).
   function toggleVoice(force){
-    const want=(force==null)? !state.voice : !!force;
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(want && !SR){ toast('이 브라우저는 음성 인식을 지원하지 않아요 (Chrome/Edge 권장).','alert'); return; }
-    if(!want){ state.voice=false; if(recog){ try{recog.onend=null; recog.stop();}catch(_){ } } setVoiceUI(false); toast('🎤 음성 명령 끔'); return; }
+    if(state.voice){ state.voice=false; if(recog){ try{recog.onend=null; recog.abort();}catch(_){ } } setVoiceUI(false); return; }
+    if(force===false) return;
+    if(!SR){ toast('이 브라우저는 음성 인식을 지원하지 않아요 (Chrome 권장).','alert'); return; }
     try{ recog=new SR(); }catch(e){ toast('음성 인식을 시작할 수 없어요.','alert'); return; }
     recog.lang='ko-KR'; recog.interimResults=false; recog.continuous=false; recog.maxAlternatives=1;
     recog.onresult=e=>{ const t=e.results[0][0].transcript; toast('🎤 “'+t+'”'); interpret(t); };
-    recog.onerror=e=>{ if(e.error!=='no-speech'&&e.error!=='aborted') toast('음성 오류: '+e.error,'alert'); };
-    recog.onend=()=>{ if(state.voice){ try{recog.start();}catch(_){ } } };
-    state.voice=true; setVoiceUI(true); try{recog.start();}catch(_){ }
-    toast('🎤 듣고 있어요 — 말해보세요 (예: “번역 켜줘”)','warm');
+    recog.onerror=e=>{ const x=e.error;
+      if(x==='not-allowed'||x==='service-not-allowed') toast('🎤 마이크 권한이 필요해요. 주소창 자물쇠 → 마이크 “허용”.','alert');
+      else if(x!=='no-speech'&&x!=='aborted') toast('음성 오류: '+x,'alert'); };
+    recog.onend=()=>{ state.voice=false; setVoiceUI(false); };   // single-shot
+    state.voice=true; setVoiceUI(true);
+    try{ recog.start(); toast('🎤 한 번 말해보세요 — 예: “번역 켜줘” (탭할 때마다 한 번씩)','warm'); }
+    catch(_){ state.voice=false; setVoiceUI(false); }
   }
   function setVoiceUI(on){ const m=document.getElementById('btnMic'); if(m) m.classList.toggle('on',on);
     const t=document.getElementById('voiceToggle'); if(t) t.classList.toggle('on',on); }
