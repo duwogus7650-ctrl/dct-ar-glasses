@@ -800,7 +800,7 @@
         await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js');
         await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js');
       }
-      live.model=await window.cocoSsd.load({base:'lite_mobilenet_v2'});
+      live.model=await window.cocoSsd.load();   // default base mobilenet_v2 — more accurate than lite
       toast('✅ 실시간 사물·사람 인식 준비 완료','warm');
     }catch(e){ toast('인식 모델 로드 실패 — 카메라 영상만 표시해요(라벨 없음).\n오프라인이면 정상입니다.','alert'); }
     live.modelLoading=false; return live.model;
@@ -899,7 +899,7 @@
     const dets=(live.dets||[]).filter(d=>d.score>0.40);
     let tracked=null;
     if(state.modules.social){
-      const persons=dets.filter(d=>d.class==='person').map(d=>{ const m=mapBox(d.bbox); return {m, cx:m.x+m.w/2, cy:m.y+m.h/2}; });
+      const persons=dets.filter(d=>d.class==='person' && d.score>=0.55).map(d=>{ const m=mapBox(d.bbox); return {m, cx:m.x+m.w/2, cy:m.y+m.h/2}; });
       if(live.named){
         let best=null,bd=1e9; for(const p of persons){ const dd=Math.hypot(p.cx-live.named.cx,p.cy-live.named.cy); if(dd<bd){bd=dd;best=p;} }
         if(best && bd<W*0.3){ live.named.cx=best.cx; live.named.cy=best.cy; tracked=best; }
@@ -918,7 +918,7 @@
       let n=0;
       for(const d of dets.slice().sort((a,b)=>b.score-a.score)){
         if(n>=14) break;
-        if(d.class==='person' && state.modules.social) continue; // avoid double-labeling the tracked person
+        if(d.class==='person'){ if(state.modules.social || d.score<0.55) continue; } // people handled by 얼굴 인식; drop weak false 'person'
         n++;
         const m=mapBox(d.bbox); const ko=COCO_KO[d.class]||d.class; const pct=Math.round(d.score*100);
         wanted['live-o'+n+ko]={ x:m.x+m.w/2, y:m.y-8, ax:m.x+m.w/2, ay:m.y, key:'lo:'+ko+pct,
