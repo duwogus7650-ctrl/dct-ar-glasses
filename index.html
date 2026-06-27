@@ -308,6 +308,7 @@
       <button class="chip-btn" data-cmd="해외 여행 시나리오 보여줘">🌐 번역 데모</button>
       <button class="chip-btn" data-cmd="얼굴 인식 켜줘">🪪 얼굴 인식</button>
       <button class="chip-btn" data-cmd="사물 스캔">🔍 사물 스캔(AI)</button>
+      <button class="chip-btn" data-cmd="장면 분류 켜줘">🧠 장면분류</button>
       <button class="chip-btn" data-cmd="러닝 코치 시나리오">🏃 러닝</button>
       <button class="chip-btn" data-cmd="물 마시기 알림 위젯 추가해줘">💧 위젯 추가</button>
       <button class="chip-btn" data-cmd="도움말">？ 명령어</button>
@@ -340,6 +341,10 @@
       <label class="modrow" style="border:0" for="gyroToggle">
         <span class="mi">🧭</span><span class="mn">자이로 시점<small>기기를 돌리면 시야 이동</small></span>
         <span class="sw" id="gyroToggle"><i></i></span>
+      </label>
+      <label class="modrow" style="border:0" for="classifyToggle">
+        <span class="mi">🧠</span><span class="mn">장면 분류 (1000종·오프라인)<small>이 장면이 무엇인지 추정 · 실사 모드</small></span>
+        <span class="sw" id="classifyToggle"><i></i></span>
       </label>
       <button class="pbtn ghost" id="btnObjScan">🔍 AI 사물 인식 (무엇이든)</button>
       <button class="pbtn ghost" id="btnScan">📸 AI 장면 번역 스캔</button>
@@ -435,7 +440,7 @@
   };
   const state = {
     on:true, tod:'day', walk:0.85, dest:'블루보틀 성수', distM:320,
-    source:'sim', gyro:false, voice:false,
+    source:'sim', gyro:false, voice:false, classify:false,
     modules:{ status:true, navigation:true, social:true, translation:true,
               weather:false, fitness:false, recipe:false, objectID:false,
               notifications:false, music:false, compass:false },
@@ -447,7 +452,8 @@
   let panX=0;                              // gyro look-around (sim)
   const orient={alpha:0,beta:0,gamma:0};   // device orientation
   const live={ stream:null, model:null, modelLoading:false, busy:false, dets:[], last:0,
-               facing:'environment', mirror:false, named:null, scan:[], codeTimers:{} };
+               facing:'environment', mirror:false, named:null, scan:[], codeTimers:{},
+               cls:{model:null,loading:false,busy:false,last:0,results:[]} };
   const COCO_KO={person:'사람',bicycle:'자전거',car:'자동차',motorcycle:'오토바이',airplane:'비행기',bus:'버스',
     train:'기차',truck:'트럭',boat:'보트','traffic light':'신호등','fire hydrant':'소화전','stop sign':'정지표지',
     'parking meter':'주차기',bench:'벤치',bird:'새',cat:'고양이',dog:'강아지',horse:'말',sheep:'양',cow:'소',
@@ -460,6 +466,8 @@
     mouse:'마우스',remote:'리모컨',keyboard:'키보드','cell phone':'휴대폰',microwave:'전자레인지',oven:'오븐',
     toaster:'토스터',sink:'싱크대',refrigerator:'냉장고',book:'책',clock:'시계',vase:'꽃병',scissors:'가위',
     'teddy bear':'곰인형','hair drier':'드라이어',toothbrush:'칫솔'};
+  // Partial Korean map for common ImageNet (MobileNet) classes; falls back to English.
+  const IMAGENET_KO={'coffee mug':'머그컵','cup':'컵','water bottle':'물병','pop bottle':'음료수병','beer bottle':'맥주병','wine bottle':'와인병','laptop':'노트북','notebook':'노트북','desktop computer':'데스크톱','computer keyboard':'키보드','mouse':'마우스','cellular telephone':'휴대폰','hand-held computer':'휴대용기기','iPod':'음악기기','remote control':'리모컨','monitor':'모니터','screen':'화면','television':'TV','desk':'책상','dining table':'식탁','chair':'의자','folding chair':'접이의자','rocking chair':'흔들의자','barber chair':'의자','couch':'소파','studio couch':'소파','bookcase':'책장','book jacket':'책','envelope':'봉투','pencil box':'필통','ballpoint':'볼펜','fountain pen':'만년필','sunglasses':'선글라스','sunglass':'선글라스','wallet':'지갑','purse':'지갑','backpack':'배낭','running shoe':'운동화','sandal':'샌들','clog':'나막신','plate':'접시','soup bowl':'국그릇','mixing bowl':'믹싱볼','tray':'쟁반','frying pan':'프라이팬','wok':'웍','spatula':'뒤집개','refrigerator':'냉장고','microwave':'전자레인지','toaster':'토스터','dishwasher':'식기세척기','washer':'세탁기','vacuum':'청소기','table lamp':'스탠드','lampshade':'전등갓','candle':'양초','analog clock':'시계','digital clock':'디지털시계','wall clock':'벽시계','digital watch':'손목시계','vase':'꽃병','pot':'화분','banana':'바나나','orange':'오렌지','lemon':'레몬','Granny Smith':'사과','strawberry':'딸기','pineapple':'파인애플','fig':'무화과','pomegranate':'석류','broccoli':'브로콜리','cucumber':'오이','bell pepper':'피망','mushroom':'버섯','pizza':'피자','hotdog':'핫도그','cheeseburger':'치즈버거','espresso':'에스프레소','plastic bag':'비닐봉지','umbrella':'우산','pillow':'베개','quilt':'이불','bath towel':'수건','toilet seat':'변기','soap dispenser':'디스펜서','hand blower':'드라이어','perfume':'향수','lipstick':'립스틱','Band Aid':'반창고','syringe':'주사기','stethoscope':'청진기','golf ball':'골프공','tennis ball':'테니스공','basketball':'농구공','soccer ball':'축구공','baseball':'야구공','ping-pong ball':'탁구공','racket':'라켓','dumbbell':'덤벨','barbell':'바벨','mountain bike':'산악자전거','tricycle':'세발자전거','motor scooter':'스쿠터','sports car':'스포츠카','minivan':'미니밴','pickup':'픽업트럭','cab':'택시','jeep':'지프','traffic light':'신호등','street sign':'표지판','park bench':'벤치','fountain':'분수','Labrador retriever':'래브라도','golden retriever':'골든리트리버','toy poodle':'푸들','standard poodle':'푸들','Persian cat':'페르시안고양이','tabby':'고양이','Egyptian cat':'고양이','tiger cat':'고양이'};
 
   const MODULES = {
     status:     {icon:'📊', name:'상태 표시줄', desc:'시간·날씨·배터리·걸음'},
@@ -798,6 +806,30 @@
     live.modelLoading=false; return live.model;
   }
 
+  // MobileNet 1000-class scene classifier (offline, no API key)
+  async function ensureClassifier(){
+    if(live.cls.model||live.cls.loading) return live.cls.model;
+    live.cls.loading=true; toast('🧠 1000종 분류기 불러오는 중…');
+    try{
+      if(!window.tf) await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js');
+      if(!window.mobilenet) await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js');
+      live.cls.model=await window.mobilenet.load({version:2,alpha:1.0});
+      toast('✅ 장면 분류 준비 완료 (1000종)','warm');
+    }catch(e){ toast('분류기 로드 실패 (오프라인이면 정상).','alert'); state.classify=false; setClassifyUI(false); }
+    live.cls.loading=false; return live.cls.model;
+  }
+  function runClassify(now){
+    const m=live.cls; if(!m.model||m.busy) return;
+    const v=camEl(); if(!v||v.readyState<2||!v.videoWidth) return;
+    if(now-m.last<1100) return; m.busy=true;
+    m.model.classify(v,3).then(r=>{ m.results=r||[]; }).catch(()=>{}).finally(()=>{ m.busy=false; m.last=performance.now(); });
+  }
+  function koLabel(s){ const first=String(s||'').split(',')[0].trim(); return IMAGENET_KO[first]||IMAGENET_KO[s]||first; }
+  function setClassifyUI(on){ const t=document.getElementById('classifyToggle'); if(t) t.classList.toggle('on',on); }
+  function toggleClassify(on){ state.classify=on; setClassifyUI(on);
+    if(on){ if(state.source==='sim') toast('🧠 실사 모드에서 작동해요 — 카메라/영상 소스를 켜세요.'); ensureClassifier(); }
+    else { live.cls.results=[]; removeWidget('classify'); toast('🧠 장면 분류 끔'); } }
+
   async function startCamera(){
     stopStream();
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
@@ -1067,6 +1099,12 @@
       placeWidget(e,2);
     } else removeWidget('compass');
 
+    if(state.classify && state.source!=='sim' && live.cls.results.length){ const e=widgetEl('classify');
+      let rows=''; live.cls.results.slice(0,3).forEach(r=>{ rows+=`<div class="row"><span>${esc(koLabel(r.className))}</span><span>${Math.round(r.probability*100)}%</span></div>`; });
+      e.innerHTML=`<div class="wh"><span class="wi">🧠</span>장면 분류</div><div class="wbody">${rows}<div class="wtag">1000종 · 오프라인</div></div>`;
+      placeWidget(e,5);
+    } else removeWidget('classify');
+
     state.custom.forEach((c,i)=>{
       const e=widgetEl('cust'+c.id); e.classList.add('custom');
       if(e._k!==c.rev){
@@ -1139,6 +1177,7 @@
       } else {
         wctx.clearRect(0,0,W,H);   // reveal camera/video underneath
         runDetection(now);
+        if(state.classify) runClassify(now);
       }
       drawHud(now);
       renderWidgets(now,dt);
@@ -1293,6 +1332,7 @@
     if(has(low,['시뮬','그림 모드','만화','sim','애니메이션'])){ setSource('sim'); toast('🖼️ 시뮬레이션 모드'); return; }
     if(has(low,['음성','마이크','voice','말로 조작'])){ toggleVoice(!has(low,OFF_WORDS)); return; }
     if(has(low,['자이로','시점 연동','기울이','gyro','방향센서','고개 돌'])){ toggleGyro(!has(low,OFF_WORDS)); return; }
+    if(has(low,['장면 분류','분류기','분류 모드','classify','1000종'])){ toggleClassify(!has(low,OFF_WORDS)); return; }
 
     // scenarios
     for(const id in SCN_KEYS){ if(has(low,SCN_KEYS[id].map(s=>s.toLowerCase())) && (has(low,['시나리오','데모','보여','재생','demo','틀어','체험']) || SCN_KEYS[id].some(k=>low.includes(k)&&k.length>2))){
@@ -1566,6 +1606,7 @@
     live.facing=on?'user':'environment'; if(state.source==='cam') startCamera(); });
   document.getElementById('voiceToggle').addEventListener('click',function(){ toggleVoice(!this.classList.contains('on')); });
   document.getElementById('gyroToggle').addEventListener('click',function(){ toggleGyro(!this.classList.contains('on')); });
+  document.getElementById('classifyToggle').addEventListener('click',function(){ toggleClassify(!this.classList.contains('on')); });
   document.getElementById('btnMic').addEventListener('click',()=>toggleVoice());
   document.getElementById('btnScan').addEventListener('click',()=>aiScan());
   document.getElementById('btnObjScan').addEventListener('click',()=>aiObjectScan());
