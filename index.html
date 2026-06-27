@@ -1375,31 +1375,29 @@
       return;
     }
 
-    // strong creation intent → custom widget
-    if(has(low,['위젯','만들','제작'])){
-      const made=makeCustomWidget(t);
-      if(made){ toast(`✦ ‘${made.title}’ 위젯을 만들었어요`,'warm'); return; }
-    }
-
-    // toggle modules
+    // module toggles (번역/내비/얼굴 인식/심박 등) — unless the user explicitly asked for a 위젯
     let target=null; for(const m2 in MOD_KEYS){ if(has(low,MOD_KEYS[m2].map(s=>s.toLowerCase()))){ target=m2; break; } }
-    if(target){
-      const off = has(low,OFF_WORDS) && !has(low,['추가','만들']);
-      state.modules[target]= !off;
-      syncUI();
-      toast(`${MODULES[target].icon} ${MODULES[target].name} ${state.modules[target]?'켰어요':'껐어요'}`);
-      return;
+    const wantsWidget = has(low,['위젯','만들','제작','추가','띄워']);
+    if(target && !wantsWidget){
+      const off = has(low,OFF_WORDS);
+      state.modules[target]= !off; syncUI();
+      toast(`${MODULES[target].icon} ${MODULES[target].name} ${state.modules[target]?'켰어요':'껐어요'}`); return;
     }
 
-    if(has(low,['위젯','기능','추가','만들','띄워','보여줘'])){
+    // info widgets keyed by 주식/날씨/일정/물/코인… — dedupe (반복해도 하나만), "끄기"도 지원
+    const hit = iconmapHit(low);
+    if(hit || wantsWidget){
+      if(hit && has(low,OFF_WORDS) && !wantsWidget){
+        toast(removeCustomByTitle(hit)?`✦ ‘${hit}’ 위젯을 닫았어요`:`‘${hit}’ 위젯이 없어요`); return; }
       const made=makeCustomWidget(t);
-      if(made){ toast(`✦ ‘${made.title}’ 위젯을 만들었어요`,'warm'); return; }
+      if(made){ toast(made._existed?`✦ ‘${made.title}’ 위젯은 이미 떠 있어요`:`✦ ‘${made.title}’ 위젯을 띄웠어요`,'warm'); return; }
     }
 
+    // anything else → AI if available
     if(state.ai.on && state.ai.key){ aiInterpret(t); return; }
 
-    makeCustomWidget(t, true);
-    toast(`“${t.slice(0,18)}”… 정확히 못 알아들었어요.\n실험 위젯으로 만들어 둘게요. (AI 모드를 켜면 더 똑똑해져요)`,'alert');
+    // genuinely unrecognized → guidance only (no junk widget pile-up)
+    toast(`“${t.slice(0,20)}”… 잘 못 알아들었어요.\n“도움말” 또는 “○○ 위젯 추가”라고 해보세요.`,'alert');
   }
 
   /* keyword → icon + sample data for custom widgets */
@@ -1416,15 +1414,21 @@
     [['주차','parking'],'🅿️',()=>({lines:[{label:'위치',value:'B2 · 14'},{label:'경과',value:'1h 20m'},{label:'요금',value:'4,000원'}]})],
     [['타로','운세','별자리'],'🔮',()=>({lines:[{label:'오늘의 운',value:'★★★★☆'},{label:'행운색',value:'민트'}]})]
   ];
+  function iconmapHit(low){ for(const e of ICONMAP){ if(e[0].some(k=>low.includes(k))) return e[0][0]; } return null; }
+  function removeCustomByTitle(title){ const i=state.custom.findIndex(c=>c.title===title);
+    if(i<0) return false; const rm=state.custom.splice(i,1)[0]; removeWidget('cust'+rm.id); return true; }
   function makeCustomWidget(text, experimental){
     const low=text.toLowerCase();
-    let icon='✦', data={lines:[{label:'상태',value:'준비됨'}]}, title=null;
-    for(const [keys,ic,gen] of ICONMAP){ if(keys.some(k=>low.includes(k))){ icon=ic; data=gen(); title=keys[0]; break; } }
-    let tt=text.replace(/(위젯|기능|추가|해줘|만들어|만들|보여줘|띄워|줘|를|을|좀|새|하나)/g,'').trim();
-    if(tt.length>14) tt=tt.slice(0,14);
-    title = tt || title || '새 위젯';
+    let icon='✦', data={lines:[{label:'상태',value:'준비됨'}]}, title=null, canonical=false;
+    for(const [keys,ic,gen] of ICONMAP){ if(keys.some(k=>low.includes(k))){ icon=ic; data=gen(); title=keys[0]; canonical=true; break; } }
+    if(!canonical){ let tt=text.replace(/(위젯|기능|추가|해줘|만들어|만들|제작|보여줘|보여|띄워|켜줘|켜|줘|를|을|좀|새|하나만|하나)/g,'').trim();
+      if(tt.length>14) tt=tt.slice(0,14); title = tt || '새 위젯'; }
+    // dedupe: a widget with the same title is already up → refresh it, don't pile duplicates
+    const existing=state.custom.find(c=>c.title===title);
+    if(existing){ existing.icon=icon; existing.lines=data.lines||existing.lines; existing.big=data.big||existing.big;
+      existing.rev='r'+Math.random(); existing._existed=true; return existing; }
     const id=(Date.now()%100000)+''+((Math.random()*1000)|0);
-    const w={ id, title, icon, lines:data.lines||[], big:data.big||null, rev:'r'+id+Math.random() };
+    const w={ id, title, icon, lines:data.lines||[], big:data.big||null, rev:'r'+id+Math.random(), _existed:false };
     if(experimental){ w.lines=[{label:'요청',value:title.slice(0,8)},{label:'상태',value:'실험적'}]; w.big=null; }
     state.custom.push(w);
     if(state.custom.length>6){ const rm=state.custom.shift(); removeWidget('cust'+rm.id); }
@@ -1492,10 +1496,12 @@
     }
   }
 
+  let aiWidgetOrder=[];
   function makeCodeWidget(a){
     if(!a.js){ toast('AI가 코드 위젯을 반환하지 않았어요.','alert'); return; }
     const id='ai'+((Math.random()*1e6)|0);
     const e=widgetEl(id); e.classList.add('custom');
+    aiWidgetOrder.push(id); while(aiWidgetOrder.length>4){ const old=aiWidgetOrder.shift(); if(old!==id) removeWidget(old); }
     e.innerHTML=`<div class="wh"><span class="wi">${esc(a.icon||'⚙️')}</span>${esc(a.title||'AI 위젯')}</div><div class="wbody"></div><div class="wtag" style="margin-top:6px">CODE · AI 생성</div>`;
     const idx=Object.keys(widgets).filter(k=>k.startsWith('ai')||k.startsWith('cust')).length;
     const s=SLOTS[idx%SLOTS.length]; e.style.left=s.l==='auto'?'auto':s.l; e.style.right=s.r==='auto'?'auto':s.r; e.style.top=(parseInt(s.t)+40)+'px';
