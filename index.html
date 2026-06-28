@@ -733,6 +733,7 @@
       }
       hctx.globalAlpha=1; hctx.restore();
     }
+    if(state.modules.navigation && nav.real) drawRouteAR();
 
     // collect anchors (sim vs live)
     const wanted={};
@@ -765,6 +766,30 @@
     }
     collectScanAnchors(wanted);  // AI 장면 번역 결과 (공통)
     reconcileAnchors(wanted, acc);
+  }
+
+  // AR route projection: lay the road route onto the camera ground plane (flat-ground pinhole)
+  function drawRouteAR(){
+    if(state.source==='sim' || nav.heading==null || !(nav.route&&nav.route.length>1)) return;
+    const acc=cssVar('--accent-warm');
+    const latM=111320, lonM=111320*Math.cos(toRad(nav.lat)), th=toRad(nav.heading);
+    const h=1.6, f=W*0.9, hz=horizon;       // eye height (m), focal length (px), horizon line
+    const pts=[];
+    for(let i=nav.rIdx;i<nav.route.length && pts.length<60;i++){
+      const dN=(nav.route[i].lat-nav.lat)*latM, dE=(nav.route[i].lon-nav.lon)*lonM;
+      const fwd=dE*Math.sin(th)+dN*Math.cos(th), lat=dE*Math.cos(th)-dN*Math.sin(th);
+      if(fwd<1.2) continue; if(fwd>400) break;
+      pts.push({x:cx+f*(lat/fwd), y:hz+f*(h/fwd), d:fwd});
+    }
+    if(pts.length<2) return;
+    hctx.save(); hctx.lineCap='round'; hctx.lineJoin='round';
+    for(let i=0;i<pts.length-1;i++){
+      const w=Math.max(2, 22/(1+pts[i].d/7));
+      hctx.strokeStyle=hexA(acc, .25+.55*(1-Math.min(1,pts[i].d/140)));
+      hctx.shadowColor=acc; hctx.shadowBlur=10;
+      hctx.lineWidth=w; hctx.beginPath(); hctx.moveTo(pts[i].x,pts[i].y); hctx.lineTo(pts[i+1].x,pts[i+1].y); hctx.stroke();
+    }
+    hctx.restore();
   }
 
   // anchored DOM card pool
