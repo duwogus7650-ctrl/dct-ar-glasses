@@ -716,7 +716,7 @@
     if(!state.on) return;
     const acc=cssVar('--accent'), warm=cssVar('--accent-warm');
 
-    if(state.modules.navigation){
+    if(state.modules.navigation && !nav.real){   // decorative ground ribbon only in sim; real nav uses the accurate chevron
       hctx.save();
       const flow=(time*0.002)%1;
       const baseW=W*0.16; const vx=cx+panX;
@@ -1034,7 +1034,8 @@
   function setGyroUI(on){ const t=document.getElementById('gyroToggle'); if(t) t.classList.toggle('on',on); }
 
   /* =================== REAL NAVIGATION (GPS + geocode + compass) =================== */
-  const nav={ real:false, dest:'', lat:null, lon:null, dLat:null, dLon:null, distM:0, brg:0, heading:null, watchId:null, _compass:false };
+  const nav={ real:false, dest:'', lat:null, lon:null, dLat:null, dLon:null, distM:0, brg:0, heading:null, watchId:null, _compass:false,
+              route:[], steps:[], rIdx:0, maneuver:'', routeDist:0 };
   function toRad(d){ return d*Math.PI/180; } function toDeg(r){ return r*180/Math.PI; }
   function haversine(a,b,c,d){ const R=6371000, dLat=toRad(c-a), dLon=toRad(d-b);
     const s=Math.sin(dLat/2)**2 + Math.cos(toRad(a))*Math.cos(toRad(c))*Math.sin(dLon/2)**2;
@@ -1044,15 +1045,43 @@
     return (toDeg(Math.atan2(y,x))+360)%360; }
   function cardinal(deg){ return ['북','북동','동','남동','남','남서','서','북서'][Math.round(deg/45)%8]; }
   function fmtDist(m){ return m>=1000? (m/1000).toFixed(m<10000?1:0)+' km' : Math.round(m)+' m'; }
+  // turn-by-turn road route via keyless OSRM demo (graceful fallback to straight line)
+  async function fetchRoute(){
+    nav.route=[]; nav.steps=[]; nav.maneuver='';
+    try{
+      const u=`https://router.project-osrm.org/route/v1/foot/${nav.lon},${nav.lat};${nav.dLon},${nav.dLat}?overview=full&geometries=geojson&steps=true`;
+      const r=await fetch(u); const j=await r.json();
+      const rt=j&&j.routes&&j.routes[0]; if(!rt||!rt.geometry) return;
+      nav.route=rt.geometry.coordinates.map(c=>({lon:c[0],lat:c[1]}));
+      nav.steps=(rt.legs&&rt.legs[0]&&rt.legs[0].steps)||[]; nav.routeDist=rt.distance||0;
+    }catch(e){ /* offline / CORS / OSRM down → straight-line fallback */ }
+  }
+  function pointAhead(idx, meters){ let acc=0;
+    for(let i=idx;i<nav.route.length-1;i++){ acc+=haversine(nav.route[i].lat,nav.route[i].lon,nav.route[i+1].lat,nav.route[i+1].lon);
+      if(acc>=meters) return nav.route[i+1]; }
+    return nav.route[nav.route.length-1]; }
   function updateNav(){ if(nav.lat==null||nav.dLat==null) return;
-    nav.distM=haversine(nav.lat,nav.lon,nav.dLat,nav.dLon); nav.brg=bearingDeg(nav.lat,nav.lon,nav.dLat,nav.dLon); state.distM=nav.distM; }
+    if(nav.route && nav.route.length>1){
+      let bi=0,bd=1e15; for(let i=0;i<nav.route.length;i++){ const d=haversine(nav.lat,nav.lon,nav.route[i].lat,nav.route[i].lon); if(d<bd){bd=d;bi=i;} }
+      nav.rIdx=bi;
+      const near=pointAhead(bi,25), far=pointAhead(bi,70);
+      nav.brg=bearingDeg(nav.lat,nav.lon,near.lat,near.lon);
+      let rem=haversine(nav.lat,nav.lon,nav.route[bi].lat,nav.route[bi].lon);
+      for(let i=bi;i<nav.route.length-1;i++) rem+=haversine(nav.route[i].lat,nav.route[i].lon,nav.route[i+1].lat,nav.route[i+1].lon);
+      nav.distM=rem;
+      const b2=bearingDeg(nav.lat,nav.lon,far.lat,far.lon); let delta=((b2-nav.brg)+540)%360-180;
+      nav.maneuver = Math.abs(delta)>30 ? ('앞에서 '+(delta>0?'우회전':'좌회전')) : '직진';
+    } else {
+      nav.distM=haversine(nav.lat,nav.lon,nav.dLat,nav.dLon); nav.brg=bearingDeg(nav.lat,nav.lon,nav.dLat,nav.dLon); nav.maneuver='';
+    }
+    state.distM=nav.distM; }
   function ensureNavCompass(){ if(nav._compass) return; nav._compass=true;
     const h=e=>{ let hd=null; if(typeof e.webkitCompassHeading==='number') hd=e.webkitCompassHeading;
       else if(e.absolute && typeof e.alpha==='number') hd=(360-e.alpha)%360; if(hd!=null) nav.heading=hd; };
     if(typeof DeviceOrientationEvent!=='undefined' && typeof DeviceOrientationEvent.requestPermission==='function'){
       DeviceOrientationEvent.requestPermission().then(r=>{ if(r==='granted') window.addEventListener('deviceorientation',h); }).catch(()=>{});
     } else { window.addEventListener('deviceorientationabsolute',h); window.addEventListener('deviceorientation',h); } }
-  function stopRealNav(){ if(nav.watchId!=null && navigator.geolocation){ navigator.geolocation.clearWatch(nav.watchId); nav.watchId=null; } nav.real=false; }
+  function stopRealNav(){ if(nav.watchId!=null && navigator.geolocation){ navigator.geolocation.clearWatch(nav.watchId); nav.watchId=null; } nav.real=false; nav.route=[]; nav.maneuver=''; }
   async function geocode(place){
     try{ const r=await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&accept-language=ko&limit=1&q='+encodeURIComponent(place),{headers:{'Accept':'application/json'}});
       const j=await r.json(); if(j&&j[0]) return {lat:+j[0].lat, lon:+j[0].lon, name:(j[0].name||place)}; }catch(e){}
@@ -1071,10 +1100,13 @@
     const g=await geocode(place);
     if(!g){ toast('‘'+place+'’ 위치를 못 찾았어요. 더 구체적으로(예: “강남역”, “서울역”) 말해보세요.','alert'); return; }
     nav.dLat=g.lat; nav.dLon=g.lon; nav.dest=g.name||place; nav.real=true;
-    state.dest=nav.dest; state.modules.navigation=true; syncUI(); updateNav(); ensureNavCompass();
+    state.dest=nav.dest; state.modules.navigation=true; syncUI();
+    await fetchRoute();          // road route for turn-by-turn; straight-line if unavailable
+    updateNav(); ensureNavCompass();
     if(nav.watchId==null && navigator.geolocation.watchPosition){
       nav.watchId=navigator.geolocation.watchPosition(p=>{ nav.lat=p.coords.latitude; nav.lon=p.coords.longitude; updateNav(); }, ()=>{}, {enableHighAccuracy:true,maximumAge:3000}); }
-    toast('🧭 '+nav.dest+'까지 '+fmtDist(nav.distM)+' · '+cardinal(nav.brg)+'쪽으로','warm');
+    const mode = (nav.route&&nav.route.length>1)?'도보 경로 안내':'직선 방향 안내';
+    toast('🧭 '+nav.dest+' · '+fmtDist(nav.distM)+' ('+mode+')','warm');
   }
 
   /* =================== FLOATING WIDGETS (DOM) =================== */
@@ -1171,14 +1203,15 @@
     if(state.modules.navigation){ na.style.display='block';
       if(nav.real){
         document.getElementById('navdist').textContent = fmtDist(nav.distM);
+        const onRoute = nav.route && nav.route.length>1;
         if(nav.heading!=null){
           const rel=((nav.brg-nav.heading)+360)%360;
           document.getElementById('navchev').style.transform='rotate('+rel.toFixed(0)+'deg)';
           const hint = (rel<25||rel>335)?'직진': rel<160?'오른쪽': (rel<200?'뒤돌아서':'왼쪽');
-          document.getElementById('navinstr').textContent=nav.dest+' · '+hint;
+          document.getElementById('navinstr').textContent = nav.dest+' · '+(onRoute ? (nav.maneuver+' · '+hint) : hint);
         } else {
           document.getElementById('navchev').style.transform='none';
-          document.getElementById('navinstr').textContent=nav.dest+' · '+cardinal(nav.brg)+'쪽 (자이로 켜면 화살표 보정)';
+          document.getElementById('navinstr').textContent = nav.dest+' · '+(onRoute ? nav.maneuver : cardinal(nav.brg)+'쪽')+' (자이로 켜면 화살표 보정)';
         }
       } else {
         document.getElementById('navdist').textContent = Math.max(0,Math.round(state.distM))+' m';
