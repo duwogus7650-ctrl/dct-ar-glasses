@@ -309,6 +309,7 @@
       <button class="chip-btn" data-cmd="얼굴 인식 켜줘">🪪 얼굴 인식</button>
       <button class="chip-btn" data-cmd="사물 스캔">🔍 사물 스캔(AI)</button>
       <button class="chip-btn" data-cmd="장면 분류 켜줘">🧠 장면분류</button>
+      <button class="chip-btn" data-cmd="서울역으로 안내">🧭 길안내(실제)</button>
       <button class="chip-btn" data-cmd="러닝 코치 시나리오">🏃 러닝</button>
       <button class="chip-btn" data-cmd="물 마시기 알림 위젯 추가해줘">💧 위젯 추가</button>
       <button class="chip-btn" data-cmd="도움말">？ 명령어</button>
@@ -1032,6 +1033,50 @@
   }
   function setGyroUI(on){ const t=document.getElementById('gyroToggle'); if(t) t.classList.toggle('on',on); }
 
+  /* =================== REAL NAVIGATION (GPS + geocode + compass) =================== */
+  const nav={ real:false, dest:'', lat:null, lon:null, dLat:null, dLon:null, distM:0, brg:0, heading:null, watchId:null, _compass:false };
+  function toRad(d){ return d*Math.PI/180; } function toDeg(r){ return r*180/Math.PI; }
+  function haversine(a,b,c,d){ const R=6371000, dLat=toRad(c-a), dLon=toRad(d-b);
+    const s=Math.sin(dLat/2)**2 + Math.cos(toRad(a))*Math.cos(toRad(c))*Math.sin(dLon/2)**2;
+    return 2*R*Math.asin(Math.min(1,Math.sqrt(s))); }
+  function bearingDeg(a,b,c,d){ const y=Math.sin(toRad(d-b))*Math.cos(toRad(c));
+    const x=Math.cos(toRad(a))*Math.sin(toRad(c))-Math.sin(toRad(a))*Math.cos(toRad(c))*Math.cos(toRad(d-b));
+    return (toDeg(Math.atan2(y,x))+360)%360; }
+  function cardinal(deg){ return ['북','북동','동','남동','남','남서','서','북서'][Math.round(deg/45)%8]; }
+  function fmtDist(m){ return m>=1000? (m/1000).toFixed(m<10000?1:0)+' km' : Math.round(m)+' m'; }
+  function updateNav(){ if(nav.lat==null||nav.dLat==null) return;
+    nav.distM=haversine(nav.lat,nav.lon,nav.dLat,nav.dLon); nav.brg=bearingDeg(nav.lat,nav.lon,nav.dLat,nav.dLon); state.distM=nav.distM; }
+  function ensureNavCompass(){ if(nav._compass) return; nav._compass=true;
+    const h=e=>{ let hd=null; if(typeof e.webkitCompassHeading==='number') hd=e.webkitCompassHeading;
+      else if(e.absolute && typeof e.alpha==='number') hd=(360-e.alpha)%360; if(hd!=null) nav.heading=hd; };
+    if(typeof DeviceOrientationEvent!=='undefined' && typeof DeviceOrientationEvent.requestPermission==='function'){
+      DeviceOrientationEvent.requestPermission().then(r=>{ if(r==='granted') window.addEventListener('deviceorientation',h); }).catch(()=>{});
+    } else { window.addEventListener('deviceorientationabsolute',h); window.addEventListener('deviceorientation',h); } }
+  function stopRealNav(){ if(nav.watchId!=null && navigator.geolocation){ navigator.geolocation.clearWatch(nav.watchId); nav.watchId=null; } nav.real=false; }
+  async function geocode(place){
+    try{ const r=await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&accept-language=ko&limit=1&q='+encodeURIComponent(place),{headers:{'Accept':'application/json'}});
+      const j=await r.json(); if(j&&j[0]) return {lat:+j[0].lat, lon:+j[0].lon, name:(j[0].name||place)}; }catch(e){}
+    try{ const r=await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&language=ko&format=json&name='+encodeURIComponent(place));
+      const j=await r.json(); const hh=j&&j.results&&j.results[0]; if(hh) return {lat:hh.latitude, lon:hh.longitude, name:hh.name}; }catch(e){}
+    return null; }
+  function setSimDest(place){ state.dest=place; state.distM=300; state.modules.navigation=true; syncUI(); }
+  async function startRealNav(place){
+    if(!navigator.geolocation || !window.isSecureContext){
+      toast('실제 길안내는 위치 권한이 되는 https 주소에서만 돼요. 우선 목적지 라벨만 ‘'+place+'’로 둘게요.','alert'); stopRealNav(); setSimDest(place); return; }
+    toast('📍 내 위치 확인 중… (권한을 “허용”하세요)');
+    let pos; try{ pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:12000,maximumAge:5000})); }
+    catch(e){ toast('위치 권한이 필요해요(거부됨/시간초과). 허용 후 다시 시도. 지금은 라벨만 변경.','alert'); stopRealNav(); setSimDest(place); return; }
+    nav.lat=pos.coords.latitude; nav.lon=pos.coords.longitude;
+    toast('🔎 ‘'+place+'’ 위치 검색 중…');
+    const g=await geocode(place);
+    if(!g){ toast('‘'+place+'’ 위치를 못 찾았어요. 더 구체적으로(예: “강남역”, “서울역”) 말해보세요.','alert'); return; }
+    nav.dLat=g.lat; nav.dLon=g.lon; nav.dest=g.name||place; nav.real=true;
+    state.dest=nav.dest; state.modules.navigation=true; syncUI(); updateNav(); ensureNavCompass();
+    if(nav.watchId==null && navigator.geolocation.watchPosition){
+      nav.watchId=navigator.geolocation.watchPosition(p=>{ nav.lat=p.coords.latitude; nav.lon=p.coords.longitude; updateNav(); }, ()=>{}, {enableHighAccuracy:true,maximumAge:3000}); }
+    toast('🧭 '+nav.dest+'까지 '+fmtDist(nav.distM)+' · '+cardinal(nav.brg)+'쪽으로','warm');
+  }
+
   /* =================== FLOATING WIDGETS (DOM) =================== */
   const widgets={};
   function widgetEl(id){ if(!widgets[id]){ const e=document.createElement('div'); e.className='widget';
@@ -1124,11 +1169,24 @@
 
     const na=document.getElementById('nav-arrow');
     if(state.modules.navigation){ na.style.display='block';
-      document.getElementById('navdist').textContent = Math.max(0,Math.round(state.distM))+' m';
-      document.getElementById('navinstr').textContent = state.dest+'까지';
-      const turn = state.distM<140 && state.distM>40;
-      document.getElementById('navchev').style.transform = turn?'rotate(-32deg)':'none';
-      if(turn) document.getElementById('navinstr').textContent='120m 앞 좌회전 · '+state.dest;
+      if(nav.real){
+        document.getElementById('navdist').textContent = fmtDist(nav.distM);
+        if(nav.heading!=null){
+          const rel=((nav.brg-nav.heading)+360)%360;
+          document.getElementById('navchev').style.transform='rotate('+rel.toFixed(0)+'deg)';
+          const hint = (rel<25||rel>335)?'직진': rel<160?'오른쪽': (rel<200?'뒤돌아서':'왼쪽');
+          document.getElementById('navinstr').textContent=nav.dest+' · '+hint;
+        } else {
+          document.getElementById('navchev').style.transform='none';
+          document.getElementById('navinstr').textContent=nav.dest+' · '+cardinal(nav.brg)+'쪽 (자이로 켜면 화살표 보정)';
+        }
+      } else {
+        document.getElementById('navdist').textContent = Math.max(0,Math.round(state.distM))+' m';
+        document.getElementById('navinstr').textContent = state.dest+'까지';
+        const turn = state.distM<140 && state.distM>40;
+        document.getElementById('navchev').style.transform = turn?'rotate(-32deg)':'none';
+        if(turn) document.getElementById('navinstr').textContent='120m 앞 좌회전 · '+state.dest;
+      }
     } else na.style.display='none';
   }
 
@@ -1167,7 +1225,7 @@
     if(state.on){
       panX = (state.gyro && state.source==='sim') ? clamp(orient.gamma,-40,40)/40*(W*0.13) : 0;
       const pace = state.walk * (RM?0.4:1);
-      state.distM -= dt*pace*9; if(state.distM<0) state.distM = state.scenario?SCN[state.scenario].distM:320;
+      if(!nav.real){ state.distM -= dt*pace*9; if(state.distM<0) state.distM = state.scenario?SCN[state.scenario].distM:320; }
       if(state.source==='sim'){
         camX += dt*pace*4;
         for(const pe of people){ pe.t += dt*(pe.speed*(0.4+state.walk)); pe.phase += dt*(4+state.walk*4);
@@ -1242,6 +1300,7 @@
   function startScenario(id){
     const s=SCN[id]; if(!s) return;
     if(state.source!=='sim') setSource('sim');   // scenarios run in the simulated world
+    stopRealNav();   // scenarios use the scripted demo route, not live GPS
     state.scenario=id; state.tod=s.tod; state.walk=s.walk; state.dest=s.dest; state.distM=s.distM;
     state.highContrast=!!s.hc;
     document.documentElement.style.setProperty('--hud-scale', (s.hc?1.3:parseFloat(localStorage.getItem('dct_size')||'1')));
@@ -1353,12 +1412,18 @@
     if(has(low,['안경테 보','테 보','프레임 켜','frame on'])){ setFrame(true); toast('안경테 표시'); return; }
     for(const name in ACCENTS){ if(low.includes(name) && has(low,['색','테마','컬러','color','accent','바꿔'])){ setAccent(name); toast(`🎨 액센트: ${name}`); return; } }
 
-    let m=t.match(/목적지[를]?\s*(.+?)\s*(으?로|로|으로|로 설정|설정)/);
-    if(m && m[1]){ state.dest=m[1].trim(); state.distM=300; state.modules.navigation=true; syncUI();
-      toast('🧭 목적지: '+state.dest,'warm'); return; }
+    // navigation: real GPS+compass guidance to any place the user names
+    let dm = t.match(/(.+?)\s*(?:으로|로|까지)\s*(?:안내|길안내|길 안내|내비|네비|가는\s*길|길찾아|데려가|가 ?줘)/);
+    if(!dm) dm = t.match(/목적지[는을를]?\s*(.+?)\s*(?:으로|로|설정)?$/);
+    if(dm && dm[1]){ const place=dm[1].replace(/^(목적지|여기서|지금|나를|날)\s*/,'').trim();
+      if(place.length>=2 && !['거기','어디','저기','집','회사'].includes(place)){ startRealNav(place); return; } }
+    if(has(low,['길안내','길 안내','내비','네비','길 알려','어떻게 가','길찾'])&&!has(low,OFF_WORDS)){
+      if(nav.real&&nav.dest){ state.modules.navigation=true; syncUI(); toast('🧭 '+nav.dest+'까지 안내 중 · '+fmtDist(nav.distM)); }
+      else { state.modules.navigation=true; syncUI(); toast('어디로 갈까요? 예: “강남역으로 안내”라고 말해주세요.','warm'); }
+      return; }
 
     // name a person (sim or live)
-    m=t.match(/(?:이 ?사람|앞사람|이름)[을은는]?\s*(.+?)\s*(?:이라고|라고|으로)?\s*(저장|기억|등록|설정)?/);
+    const m=t.match(/(?:이 ?사람|앞사람|이름)[을은는]?\s*(.+?)\s*(?:이라고|라고|으로)?\s*(저장|기억|등록|설정)?/);
     if((low.includes('이름') && (low.includes('저장')||low.includes('기억')||low.includes('등록'))) && m && m[1]){
       const nm=(m[1].replace(/이름/g,'').trim())||'새 친구';
       if(state.source!=='sim'){
@@ -1381,6 +1446,7 @@
     if(target && !wantsWidget){
       const off = has(low,OFF_WORDS);
       state.modules[target]= !off; syncUI();
+      if(target==='navigation' && off) stopRealNav();
       toast(`${MODULES[target].icon} ${MODULES[target].name} ${state.modules[target]?'켰어요':'껐어요'}`); return;
     }
 
@@ -1567,6 +1633,7 @@
       '“번역 켜줘” · “사물 인식 꺼”',
       '“이 사람 이름 철수 저장”',
       '“사물 스캔”·“장면 번역” (실사 + AI 모드, 무엇이든)',
+      '“강남역으로 안내” (실제 GPS+나침반 길안내)',
       '“주식 위젯 추가” · “환율 계산기 만들어줘” (AI)',
       '“해외 여행 시나리오” · “다음 장면”'
     ];
